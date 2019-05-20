@@ -24,6 +24,7 @@ Metadata:
       - ParentSSHBastionStack
       - ParentAuthProxyStack
       - ParentAlertStack
+      - ParentS3StackAccessLog
       - ParentZoneStack
     - Label:
         default: 'EC2 Parameters'
@@ -41,6 +42,7 @@ Metadata:
       - MasterAdminPassword
       - MasterLogsRetentionInDays
       - MasterVolumeSize
+      - MasterLoadBalancerIdleTimeout
     - Label:
         default: 'Agent Parameters'
       Parameters:
@@ -66,6 +68,10 @@ Parameters:
     Default: ''
   ParentAlertStack:
     Description: 'Optional but recommended stack name of parent alert stack based on operations/alert.yaml template.'
+    Type: String
+    Default: ''
+  ParentS3StackAccessLog:
+    Description: 'Optional stack name of parent s3 stack based on state/s3.yaml template (with Access set to ElbAccessLogWrite) to store access logs.'
     Type: String
     Default: ''
   ParentZoneStack:
@@ -126,6 +132,12 @@ Parameters:
     ConstraintDescription: 'Must be in the range [8-1024]'
     MinValue: 8
     MaxValue: 1024
+  MasterLoadBalancerIdleTimeout:
+    Description: 'The idle timeout value, in seconds.'
+    Type: Number
+    Default: 60
+    MinValue: 1
+    MaxValue: 4000
   AgentSubnetsReach:
     Description: 'Should the agents have direct access to the Internet or do you prefer private subnets with NAT?'
     Type: String
@@ -157,7 +169,7 @@ Parameters:
     ConstraintDescription: 'Must be >= 0'
     MinValue: 0
   AgentDesiredCapacity:
-    Description: 'The desired start size of the agents Auto Scaling group.'
+    Description: 'Deprecated in v9, will be removed in v11, use `AgentMinSize` instead!'
     Type: Number
     Default: 0
     ConstraintDescription: 'Must be >= 0'
@@ -180,40 +192,40 @@ Parameters:
     Default: 'jenkins.'
 Mappings:
   RegionMap:
-    'ap-south-1':
-      AMI: 'ami-06bcd1131b2f55803'
-    'eu-west-3':
-      AMI: 'ami-051707cdba246187b'
     'eu-north-1':
-      AMI: 'ami-07ec6279'
+      AMI: 'ami-d16fe6af'
+    'ap-south-1':
+      AMI: 'ami-0889b8a448de4fc44'
+    'eu-west-3':
+      AMI: 'ami-0451ae4fd8dd178f7'
     'eu-west-2':
-      AMI: 'ami-0274e11dced17bb5b'
+      AMI: 'ami-09ead922c1dad67e4'
     'eu-west-1':
-      AMI: 'ami-09693313102a30b2c'
+      AMI: 'ami-07683a44e80cd32c5'
     'ap-northeast-2':
-      AMI: 'ami-0b4fdb56a00adb616'
+      AMI: 'ami-047f7b46bd6dd5d84'
     'ap-northeast-1':
-      AMI: 'ami-0a2de1c3b415889d2'
+      AMI: 'ami-0f9ae750e8274075b'
     'sa-east-1':
-      AMI: 'ami-0112d42866980b373'
+      AMI: 'ami-0669a96e355eac82f'
     'ca-central-1':
-      AMI: 'ami-076b4adb3f90cd384'
+      AMI: 'ami-03338e1f67dae0168'
     'ap-southeast-1':
-      AMI: 'ami-0b84d2c53ad5250c2'
+      AMI: 'ami-0b419c3a4b01d1859'
     'ap-southeast-2':
-      AMI: 'ami-08589eca6dcc9b39c'
+      AMI: 'ami-04481c741a0311bbb'
     'eu-central-1':
-      AMI: 'ami-034fffcc6a0063961'
+      AMI: 'ami-09def150731bdbcc2'
     'us-east-1':
-      AMI: 'ami-009d6802948d06e52'
+      AMI: 'ami-0de53d8956e8dcf80'
     'us-east-2':
-      AMI: 'ami-02e680c4540db351e'
+      AMI: 'ami-02bcbb802e03574ba'
     'us-west-1':
-      AMI: 'ami-011b6930a81cd6aaf'
+      AMI: 'ami-0019ef04ac50be30f'
     'us-west-2':
-      AMI: 'ami-01bbe152bf19d0289'
+      AMI: 'ami-061392db613a6357b'
 Conditions:
-  HasZeroAgents: !Equals [!Ref AgentDesiredCapacity, '0']
+  HasZeroAgents: !Equals [!Ref AgentMinSize, '0']
   HasKeyName: !Not [!Equals [!Ref KeyName, '']]
   HasIAMUserSSHAccess: !Equals [!Ref IAMUserSSHAccess, 'true']
   HasSystemsManagerAccess: !Equals [!Ref SystemsManagerAccess, 'true']
@@ -223,6 +235,7 @@ Conditions:
   HasNotAuthProxySecurityGroup: !Equals [!Ref ParentAuthProxyStack, '']
   HasMasterELBSchemeInternal: !Equals [!Ref MasterELBScheme, 'internal']
   HasAlertTopic: !Not [!Equals [!Ref ParentAlertStack, '']]
+  HasS3Bucket: !Not [!Equals [!Ref ParentS3StackAccessLog, '']]
   HasZone: !Not [!Equals [!Ref ParentZoneStack, '']]
 Resources:
   MasterStorageSG:
@@ -397,6 +410,15 @@ Resources:
   MasterELB:
     Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
     Properties:
+      LoadBalancerAttributes:
+      - Key: 'idle_timeout.timeout_seconds'
+        Value: !Ref MasterLoadBalancerIdleTimeout
+      - Key: 'routing.http2.enabled'
+        Value: 'true'
+      - Key: 'access_logs.s3.enabled'
+        Value: !If [HasS3Bucket, 'true', 'false']
+      - !If [HasS3Bucket, {Key: 'access_logs.s3.prefix', Value: !Ref 'AWS::StackName'}, !Ref 'AWS::NoValue']
+      - !If [HasS3Bucket, {Key: 'access_logs.s3.bucket', Value: {'Fn::ImportValue': !Sub '${ParentS3StackAccessLog}-BucketName'}}, !Ref 'AWS::NoValue']
       Scheme: !Ref MasterELBScheme
       SecurityGroups:
       - !Ref MasterELBSG
@@ -485,6 +507,7 @@ Resources:
             Action:
             - 'sqs:DeleteMessage'
             - 'sqs:ReceiveMessage'
+            - 'sqs:ChangeMessageVisibility'
             Resource: !GetAtt 'AgentTerminatingLifecycleHookQueue.Arn'
       - PolicyName: logs
         PolicyDocument:
@@ -492,6 +515,7 @@ Resources:
           Statement:
           - Effect: Allow
             Action:
+            - 'logs:CreateLogGroup'
             - 'logs:CreateLogStream'
             - 'logs:PutLogEvents'
             - 'logs:DescribeLogStreams'
@@ -571,7 +595,7 @@ Resources:
     Metadata:
       'AWS::CloudFormation::Init':
         configSets:
-          default: !If [HasIAMUserSSHAccess, [awslogs, ssh-access, mount, install, setup, extras, custom, run], [awslogs, mount, install, setup, extras, custom, run]]
+          default: !If [HasIAMUserSSHAccess, [awslogs, ssh-access, mount, extras, install, setup, custom, run], [awslogs, mount, extras, install, setup, custom, run]]
         awslogs:
           packages:
             yum:
@@ -762,9 +786,11 @@ Resources:
               group: root
           commands:
             'a_configure_sshd_command':
-              command: 'sed -i "s:#AuthorizedKeysCommand none:AuthorizedKeysCommand /opt/authorized_keys_command.sh:g" /etc/ssh/sshd_config'
+              command: 'sed -e ''/AuthorizedKeysCommand / s/^#*/#/'' -i /etc/ssh/sshd_config; echo -e ''\nAuthorizedKeysCommand /opt/authorized_keys_command.sh'' >> /etc/ssh/sshd_config'
+              test: '! grep -q ''^AuthorizedKeysCommand /opt/authorized_keys_command.sh'' /etc/ssh/sshd_config'
             'b_configure_sshd_commanduser':
-              command: 'sed -i "s:#AuthorizedKeysCommandUser nobody:AuthorizedKeysCommandUser nobody:g" /etc/ssh/sshd_config'
+              command: 'sed -e ''/AuthorizedKeysCommandUser / s/^#*/#/'' -i /etc/ssh/sshd_config; echo -e ''\nAuthorizedKeysCommandUser nobody'' >> /etc/ssh/sshd_config'
+              test: '! grep -q ''^AuthorizedKeysCommandUser nobody'' /etc/ssh/sshd_config'
             'c_import_users':
               command: './import_users.sh'
               cwd: '/opt'
@@ -776,6 +802,14 @@ Resources:
                 commands:
                 - 'a_configure_sshd_command'
                 - 'b_configure_sshd_commanduser'
+        extras:
+          commands:
+            'a_enable_docker':
+              command: 'amazon-linux-extras enable docker=18.06.1'
+              test: "! grep -Fxq '[amzn2extra-docker]' /etc/yum.repos.d/amzn2-extras.repo"
+            'b_enable_corretto8':
+              command: 'amazon-linux-extras enable corretto8'
+              test: "! grep -Fxq '[amzn2extra-corretto8]' /etc/yum.repos.d/amzn2-extras.repo"
         mount:
           packages:
             yum:
@@ -801,9 +835,9 @@ Resources:
         install:
           packages:
             rpm:
-              jenkins: 'https://pkg.jenkins.io/redhat-stable/jenkins-2.150.1-1.1.noarch.rpm'
+              jenkins: 'https://pkg.jenkins.io/redhat-stable/jenkins-2.164.3-1.1.noarch.rpm'
             yum:
-              'java-1.8.0-openjdk': []
+              'java-1.8.0-amazon-corretto': []
           files:
             '/etc/cfn/cfn-hup.conf':
               content: !Sub |
@@ -935,14 +969,15 @@ Resources:
                     return false
                   end
                 end
-                def awaitAgentIdle(agent)
+                def awaitAgentIdle(poller, message, agent)
                   endTime = Time.now.to_i + $conf['maxWaitInSeconds']
                   while Time.now.to_i < endTime do
                     if isAgentIdle agent
                       $log.info "agent #{agent} is idle"
                       return true
                     end
-                    sleep 5 # seconds
+                    poller.change_message_visibility_timeout(message, 30)
+                    sleep 15 # seconds
                   end
                   $log.error "agent #{agent} is not idle, but wait time elapsed"
                   return false
@@ -979,7 +1014,7 @@ Resources:
                         if body['LifecycleTransition'] == 'autoscaling:EC2_INSTANCE_TERMINATING'
                           $log.info "lifecycle transition for agent #{body['EC2InstanceId']}"
                           takeAgentTemporarilyOffline body['EC2InstanceId']
-                          awaitAgentIdle body['EC2InstanceId']
+                          awaitAgentIdle poller, msg, body['EC2InstanceId']
                           deleteAgent body['EC2InstanceId']
                           completeLifecycleAction body['LifecycleActionToken'], body['LifecycleHookName'], body['AutoScalingGroupName']
                         else
@@ -1148,11 +1183,6 @@ Resources:
             'z_create_setup_done_file':
               command: 'echo "Setup done. Don not delete this file." > /var/lib/jenkins/setup_done.txt'
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
-        extras:
-          commands:
-            a_enable_docker:
-              command: 'amazon-linux-extras enable docker=18.06.1'
-              test: "! grep -Fxq '[amzn2extra-docker]' /etc/yum.repos.d/amzn2-extras.repo"
         custom:
           packages:
             yum:
@@ -1204,7 +1234,6 @@ Resources:
       LaunchConfigurationName: !Ref MasterLC
       MinSize: '1'
       MaxSize: '1'
-      DesiredCapacity: '1'
       HealthCheckGracePeriod: 900
       HealthCheckType: ELB
       NotificationConfigurations: !If
@@ -1274,25 +1303,6 @@ Resources:
       TargetGroupAttributes:
       - Key: 'deregistration_delay.timeout_seconds'
         Value: '15'
-  AgentHTTPCodeELB5XXTooHighAlarm:
-    Condition: HasAlertTopic
-    Type: 'AWS::CloudWatch::Alarm'
-    Properties:
-      AlarmDescription: 'Application load balancer returns 5XX HTTP status codes'
-      Namespace: 'AWS/ApplicationELB'
-      MetricName: HTTPCode_ELB_5XX_Count
-      Statistic: Sum
-      Period: 60
-      EvaluationPeriods: 1
-      ComparisonOperator: GreaterThanThreshold
-      Threshold: 0
-      AlarmActions:
-      - {'Fn::ImportValue': !Sub '${ParentAlertStack}-TopicARN'}
-      Dimensions:
-      - Name: LoadBalancer
-        Value: !GetAtt 'MasterELB.LoadBalancerFullName'
-      - Name: TargetGroup
-        Value: !GetAtt AgentELBTargetGroup.TargetGroupFullName
   AgentHTTPCodeTarget5XXTooHighAlarm:
     Condition: HasAlertTopic
     Type: 'AWS::CloudWatch::Alarm'
@@ -1300,25 +1310,6 @@ Resources:
       AlarmDescription: 'Application load balancer receives 5XX HTTP status codes from targets'
       Namespace: 'AWS/ApplicationELB'
       MetricName: HTTPCode_Target_5XX_Count
-      Statistic: Sum
-      Period: 60
-      EvaluationPeriods: 1
-      ComparisonOperator: GreaterThanThreshold
-      Threshold: 0
-      AlarmActions:
-      - {'Fn::ImportValue': !Sub '${ParentAlertStack}-TopicARN'}
-      Dimensions:
-      - Name: LoadBalancer
-        Value: !GetAtt 'MasterELB.LoadBalancerFullName'
-      - Name: TargetGroup
-        Value: !GetAtt AgentELBTargetGroup.TargetGroupFullName
-  AgentRejectedConnectionCountTooHighAlarm:
-    Condition: HasAlertTopic
-    Type: 'AWS::CloudWatch::Alarm'
-    Properties:
-      AlarmDescription: 'Application load balancer rejected connections because the load balancer had reached its maximum number of connections'
-      Namespace: 'AWS/ApplicationELB'
-      MetricName: RejectedConnectionCount
       Statistic: Sum
       Period: 60
       EvaluationPeriods: 1
@@ -1396,6 +1387,7 @@ Resources:
           Statement:
           - Effect: Allow
             Action:
+            - 'logs:CreateLogGroup'
             - 'logs:CreateLogStream'
             - 'logs:PutLogEvents'
             - 'logs:DescribeLogStreams'
@@ -1467,7 +1459,7 @@ Resources:
     Metadata:
       'AWS::CloudFormation::Init':
         configSets:
-          default: !If [HasIAMUserSSHAccess, [awslogs, ssh-access, install, setup, extras, custom, run], [awslogs, install, setup, extras, custom, run]]
+          default: !If [HasIAMUserSSHAccess, [awslogs, ssh-access, extras, install, setup, custom, run], [awslogs, extras, install, setup, custom, run]]
         awslogs:
           packages:
             yum:
@@ -1645,9 +1637,11 @@ Resources:
               group: root
           commands:
             'a_configure_sshd_command':
-              command: 'sed -i "s:#AuthorizedKeysCommand none:AuthorizedKeysCommand /opt/authorized_keys_command.sh:g" /etc/ssh/sshd_config'
+              command: 'sed -e ''/AuthorizedKeysCommand / s/^#*/#/'' -i /etc/ssh/sshd_config; echo -e ''\nAuthorizedKeysCommand /opt/authorized_keys_command.sh'' >> /etc/ssh/sshd_config'
+              test: '! grep -q ''^AuthorizedKeysCommand /opt/authorized_keys_command.sh'' /etc/ssh/sshd_config'
             'b_configure_sshd_commanduser':
-              command: 'sed -i "s:#AuthorizedKeysCommandUser nobody:AuthorizedKeysCommandUser nobody:g" /etc/ssh/sshd_config'
+              command: 'sed -e ''/AuthorizedKeysCommandUser / s/^#*/#/'' -i /etc/ssh/sshd_config; echo -e ''\nAuthorizedKeysCommandUser nobody'' >> /etc/ssh/sshd_config'
+              test: '! grep -q ''^AuthorizedKeysCommandUser nobody'' /etc/ssh/sshd_config'
             'c_import_users':
               command: './import_users.sh'
               cwd: '/opt'
@@ -1659,10 +1653,18 @@ Resources:
                 commands:
                 - 'a_configure_sshd_command'
                 - 'b_configure_sshd_commanduser'
+        extras:
+          commands:
+            'a_enable_docker':
+              command: 'amazon-linux-extras enable docker=18.06.1'
+              test: "! grep -Fxq '[amzn2extra-docker]' /etc/yum.repos.d/amzn2-extras.repo"
+            'b_enable_corretto8':
+              command: 'amazon-linux-extras enable corretto8'
+              test: "! grep -Fxq '[amzn2extra-corretto8]' /etc/yum.repos.d/amzn2-extras.repo"
         install:
           packages:
             yum:
-              'java-1.8.0-openjdk': []
+              'java-1.8.0-amazon-corretto': []
           files:
             '/etc/cfn/cfn-hup.conf':
               content: !Sub |
@@ -1878,11 +1880,6 @@ Resources:
               command: '/root/create-agent.sh'
               cwd: '/var/lib/jenkins'
               test: 'if /root/check-agent.sh; then exit 1; else exit 0; fi'
-        extras:
-          commands:
-            a_enable_docker:
-              command: 'amazon-linux-extras enable docker=18.06.1'
-              test: "! grep -Fxq '[amzn2extra-docker]' /etc/yum.repos.d/amzn2-extras.repo"
         custom:
           packages:
             yum:
@@ -1939,7 +1936,6 @@ Resources:
       LaunchConfigurationName: !Ref AgentLC
       MinSize: !Ref AgentMinSize
       MaxSize: !Ref AgentMaxSize
-      DesiredCapacity: !Ref AgentDesiredCapacity
       HealthCheckGracePeriod: 600
       HealthCheckType: ELB
       TargetGroupARNs:
@@ -1993,7 +1989,7 @@ Resources:
     Type: 'AWS::SQS::Queue'
     Properties:
       QueueName: !Sub '${AWS::StackName}-terminating-lifecycle-hook'
-      VisibilityTimeout: !Ref AgentMaxBuildWaitTimeInSeconds
+      VisibilityTimeout: 30
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt 'AgentTerminatingLifecycleHookDeadLetterQueue.Arn'
         maxReceiveCount: 5

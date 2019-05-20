@@ -25,23 +25,27 @@ Metadata:
       - ParentAuthProxyStack
       - ParentAlertStack
       - ParentZoneStack
+      - ParentS3StackAccessLog
     - Label:
         default: 'Load Balancer Parameters'
       Parameters:
       - LoadBalancerScheme
       - LoadBalancerCertificateArn
+      - LoadBalancerIdleTimeout
       - LoadBalancerDeregistrationDelay
-    - Label:
-        default: 'Service Parameters'
-      Parameters:
-      - SubDomainNameWithDot
     - Label:
         default: 'Task Parameters'
       Parameters:
       - Image
+    - Label:
+        default: 'Service Parameters'
+      Parameters:
+      - SubDomainNameWithDot
       - DesiredCount
+      - AutoScaling
       - MaxCapacity
       - MinCapacity
+      - HealthCheckGracePeriod
 Parameters:
   ParentVPCStack:
     Description: 'Stack name of parent VPC stack based on vpc/vpc-*azs.yaml template.'
@@ -61,6 +65,10 @@ Parameters:
     Description: 'Optional stack name of parent zone stack based on vpc/zone-*.yaml template.'
     Type: String
     Default: ''
+  ParentS3StackAccessLog:
+    Description: 'Optional stack name of parent s3 stack based on state/s3.yaml template (with Access set to ElbAccessLogWrite) to store access logs.'
+    Type: String
+    Default: ''
   LoadBalancerScheme:
     Description: 'Indicates whether the load balancer in front of the ECS service is internet-facing or internal.'
     Type: String
@@ -72,10 +80,16 @@ Parameters:
     Description: 'Optional Amazon Resource Name (ARN) of the certificate to associate with the load balancer.'
     Type: String
     Default: ''
+  LoadBalancerIdleTimeout:
+    Description: 'The idle timeout value, in seconds.'
+    Type: Number
+    Default: 60
+    MinValue: 1
+    MaxValue: 4000
   LoadBalancerDeregistrationDelay:
     Description: 'The amount time (in seconds) to wait before changing the state of a deregistering target from draining to unused.'
     Type: Number
-    Default: 300
+    Default: 60
     ConstraintDescription: 'Must be in the range [0-3600]'
     MinValue: 0
     MaxValue: 3600
@@ -104,7 +118,17 @@ Parameters:
     Description: 'Name that is used to create the DNS entry with trailing dot, e.g. §{SubDomainNameWithDot}§{HostedZoneName}. Leave blank for naked (or apex and bare) domain. Requires ParentZoneStack parameter!'
     Type: String
     Default: ''
-Mappings: {}
+  AutoScaling:
+    Description: 'Scale number of tasks based on CPU load?'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+  HealthCheckGracePeriod:
+    Description: 'The period of time, in seconds, that the Amazon ECS service scheduler ignores unhealthy Elastic Load Balancing target health checks after a task has first started.'
+    Type: Number
+    Default: 60
+    MinValue: 0
+    MaxValue: 1800
 Conditions:
   HasAuthProxySecurityGroup: !Not [!Equals [!Ref ParentAuthProxyStack, '']]
   HasNotAuthProxySecurityGroup: !Equals [!Ref ParentAuthProxyStack, '']
@@ -114,6 +138,8 @@ Conditions:
   HasNotAuthProxySecurityGroupAndLoadBalancerCertificateArn: !And [!Condition HasNotAuthProxySecurityGroup, !Condition HasLoadBalancerCertificateArn]
   HasAlertTopic: !Not [!Equals [!Ref ParentAlertStack, '']]
   HasZone: !Not [!Equals [!Ref ParentZoneStack, '']]
+  HasS3Bucket: !Not [!Equals [!Ref ParentS3StackAccessLog, '']]
+  HasAutoScaling: !Equals [!Ref AutoScaling, 'true']
 Resources:
   TaskDefinition:
     Type: 'AWS::ECS::TaskDefinition'
@@ -284,6 +310,15 @@ Resources:
   LoadBalancer:
     Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
     Properties:
+      LoadBalancerAttributes:
+      - Key: 'idle_timeout.timeout_seconds'
+        Value: !Ref LoadBalancerIdleTimeout
+      - Key: 'routing.http2.enabled'
+        Value: 'true'
+      - Key: 'access_logs.s3.enabled'
+        Value: !If [HasS3Bucket, 'true', 'false']
+      - !If [HasS3Bucket, {Key: 'access_logs.s3.prefix', Value: !Ref 'AWS::StackName'}, !Ref 'AWS::NoValue']
+      - !If [HasS3Bucket, {Key: 'access_logs.s3.bucket', Value: {'Fn::ImportValue': !Sub '${ParentS3StackAccessLog}-BucketName'}}, !Ref 'AWS::NoValue']
       Scheme: !Ref LoadBalancerScheme
       SecurityGroups:
       - !Ref ALBSecurityGroup
@@ -333,6 +368,7 @@ Resources:
         MaximumPercent: 200
         MinimumHealthyPercent: 50
       DesiredCount: !Ref DesiredCount
+      HealthCheckGracePeriodSeconds: !Ref HealthCheckGracePeriod
       LoadBalancers:
       - ContainerName: main
         ContainerPort: 80
@@ -344,7 +380,27 @@ Resources:
         Field: instanceId
       Role: !GetAtt 'ServiceRole.Arn'
       TaskDefinition: !Ref TaskDefinition
+  CPUUtilizationTooHighAlarm:
+    Condition: HasAlertTopic
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmDescription: 'Average CPU utilization over last 10 minutes higher than 80%'
+      Namespace: 'AWS/ECS'
+      Dimensions:
+      - Name: ClusterName
+        Value: {'Fn::ImportValue': !Sub '${ParentClusterStack}-Cluster'}
+      - Name: ServiceName
+        Value: !GetAtt 'Service.Name'
+      MetricName: CPUUtilization
+      ComparisonOperator: GreaterThanThreshold
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 80
+      AlarmActions:
+      - {'Fn::ImportValue': !Sub '${ParentAlertStack}-TopicARN'}
   ScalableTargetRole: # based on http://docs.aws.amazon.com/AmazonECS/latest/developerguide/autoscale_IAM_role.html
+    Condition: HasAutoScaling
     Type: 'AWS::IAM::Role'
     Properties:
       AssumeRolePolicyDocument:
@@ -374,6 +430,7 @@ Resources:
             - 'cloudwatch:DescribeAlarms'
             Resource: '*'
   ScalableTarget:
+    Condition: HasAutoScaling
     Type: 'AWS::ApplicationAutoScaling::ScalableTarget'
     Properties:
       MaxCapacity: !Ref MaxCapacity
@@ -386,6 +443,7 @@ Resources:
       ScalableDimension: 'ecs:service:DesiredCount'
       ServiceNamespace: ecs
   ScaleUpPolicy:
+    Condition: HasAutoScaling
     Type: 'AWS::ApplicationAutoScaling::ScalingPolicy'
     Properties:
       PolicyName: !Sub '${AWS::StackName}-scale-up'
@@ -399,6 +457,7 @@ Resources:
         - MetricIntervalLowerBound: 0
           ScalingAdjustment: 25
   ScaleDownPolicy:
+    Condition: HasAutoScaling
     Type: 'AWS::ApplicationAutoScaling::ScalingPolicy'
     Properties:
       PolicyName: !Sub '${AWS::StackName}-scale-down'
@@ -411,26 +470,8 @@ Resources:
         StepAdjustments:
         - MetricIntervalUpperBound: 0
           ScalingAdjustment: -25
-  CPUUtilizationTooHighAlarm:
-    Condition: HasAlertTopic
-    Type: 'AWS::CloudWatch::Alarm'
-    Properties:
-      AlarmDescription: 'Average CPU utilization over last 10 minutes higher than 80%'
-      Namespace: 'AWS/ECS'
-      Dimensions:
-      - Name: ClusterName
-        Value: {'Fn::ImportValue': !Sub '${ParentClusterStack}-Cluster'}
-      - Name: ServiceName
-        Value: !GetAtt 'Service.Name'
-      MetricName: CPUUtilization
-      ComparisonOperator: GreaterThanThreshold
-      Statistic: Average
-      Period: 300
-      EvaluationPeriods: 1
-      Threshold: 80
-      AlarmActions:
-      - {'Fn::ImportValue': !Sub '${ParentAlertStack}-TopicARN'}
   CPUUtilizationHighAlarm:
+    Condition: HasAutoScaling
     Type: 'AWS::CloudWatch::Alarm'
     Properties:
       AlarmDescription: 'Service is running out of CPU'
@@ -449,6 +490,7 @@ Resources:
       AlarmActions:
       - !Ref ScaleUpPolicy
   CPUUtilizationLowAlarm:
+    Condition: HasAutoScaling
     Type: 'AWS::CloudWatch::Alarm'
     Properties:
       AlarmDescription: 'Service is wasting CPU'

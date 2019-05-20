@@ -16,8 +16,8 @@ This template describes a fault tolerant and scalable ECS cluster on AWS. The cl
 ![Architecture](./img/ecs-cluster.png)
 
 ## Installation Guide
-1. This templates depends on our [`vpc-*azs.yaml`](./vpc/) template. [![Launch Stack](./img/launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/new?stackName=vpc-2azs&templateURL=https://s3-eu-west-1.amazonaws.com/widdix-aws-cf-templates-releases-eu-west-1/__VERSION__/vpc/vpc-2azs.yaml)
-1. [![Launch Stack](./img/launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/new?stackName=ecs-cluster&templateURL=https://s3-eu-west-1.amazonaws.com/widdix-aws-cf-templates-releases-eu-west-1/__VERSION__/ecs/cluster.yaml)
+1. This templates depends on one of our [`vpc-*azs.yaml`](./vpc/) templates. [![Launch Stack](./img/launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/create/review?templateURL=https://s3-eu-west-1.amazonaws.com/widdix-aws-cf-templates-releases-eu-west-1/__VERSION__/vpc/vpc-2azs.yaml&stackName=vpc)
+1. [![Launch Stack](./img/launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/create/review?templateURL=https://s3-eu-west-1.amazonaws.com/widdix-aws-cf-templates-releases-eu-west-1/__VERSION__/ecs/cluster.yaml&stackName=ecs-cluster&param_ParentVPCStack=vpc)
 1. Click **Next** to proceed with the next step of the wizard.
 1. Specify a name and all parameters for the stack.
 1. Click **Next** to proceed with the next step of the wizard.
@@ -29,8 +29,9 @@ This template describes a fault tolerant and scalable ECS cluster on AWS. The cl
 ## Dependencies
 * `vpc/vpc-*azs.yaml` (**required**)
 * `vpc/vpc-*-bastion.yaml` (recommended)
-* `security/auth-proxy-*.yaml`
 * `operations/alert.yaml` (recommended)
+* `security/auth-proxy-*.yaml`
+* `state/s3.yaml`
 * `state/client-sg.yaml`
 
 # ECS service
@@ -43,13 +44,13 @@ We provide two service templates:
 * `service-dedicated-alb.yaml` includes a dedicated load balancer (ALB).
 
 ## Using the cluster's load balancer and path and/or host based routing
-This template describes a fault tolerant and scalable ECS service that uses the cluster's load balancer and path and/or host based routing.
+This template describes a fault tolerant and scalable ECS service that uses the cluster's load balancer and path and/or host based routing for incoming traffic.
 
 ![Architecture](./img/ecs-service-cluster-alb.png)
 
 ### Installation Guide
-1. This templates depends on our [`cluster.yaml`](./ecs/) template. [![Launch Stack](./img/launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/new?stackName=ecs-cluster&templateURL=https://s3-eu-west-1.amazonaws.com/widdix-aws-cf-templates-releases-eu-west-1/__VERSION__/ecs/cluster.yaml)
-1. [![Launch Stack](./img/launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/new?stackName=ecs-service&templateURL=https://s3-eu-west-1.amazonaws.com/widdix-aws-cf-templates-releases-eu-west-1/__VERSION__/ecs/service-cluster-alb.yaml)
+1. This templates depends on our `cluster.yaml` template. [![Launch Stack](./img/launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/create/review?templateURL=https://s3-eu-west-1.amazonaws.com/widdix-aws-cf-templates-releases-eu-west-1/__VERSION__/ecs/cluster.yaml&stackName=ecs-cluster&param_ParentVPCStack=vpc)
+1. [![Launch Stack](./img/launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/create/review?templateURL=https://s3-eu-west-1.amazonaws.com/widdix-aws-cf-templates-releases-eu-west-1/__VERSION__/ecs/service-cluster-alb.yaml&stackName=ecs-service&param_ParentClusterStack=ecs-cluster&param_Image=widdix/hello:v1)
 1. Click **Next** to proceed with the next step of the wizard.
 1. Specify a name and all parameters for the stack.
 1. Click **Next** to proceed with the next step of the wizard.
@@ -61,15 +62,17 @@ This template describes a fault tolerant and scalable ECS service that uses the 
 ### Dependencies
 * `ecs/cluster.yaml` (**required**)
 * `operations/alert.yaml` (recommended)
+* `vpc/zone-*.yaml`
 
 ## Using a dedicated load balancer for the service
-This template describes a fault tolerant and scalable ECS service that uses a dedicated load balancer for the service.
+This template describes a fault tolerant and scalable ECS service that uses a dedicated load balancer for incoming traffic.
 
 ![Architecture](./img/ecs-service-dedicated-alb.png)
 
 ### Installation Guide
-1. This templates depends on our [`cluster.yaml`](./ecs/) template. [![Launch Stack](./img/launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/new?stackName=ecs-cluster&templateURL=https://s3-eu-west-1.amazonaws.com/widdix-aws-cf-templates-releases-eu-west-1/__VERSION__/ecs/cluster.yaml)
-1. [![Launch Stack](./img/launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/new?stackName=ecs-service&templateURL=https://s3-eu-west-1.amazonaws.com/widdix-aws-cf-templates-releases-eu-west-1/__VERSION__/ecs/service-dedicated-alb.yaml)
+1. This templates depends on one of our [`vpc-*azs.yaml`](./vpc/) templates. [![Launch Stack](./img/launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/create/review?templateURL=https://s3-eu-west-1.amazonaws.com/widdix-aws-cf-templates-releases-eu-west-1/__VERSION__/vpc/vpc-2azs.yaml&stackName=vpc)
+1. This templates depends on our `cluster.yaml` template. [![Launch Stack](./img/launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/create/review?templateURL=https://s3-eu-west-1.amazonaws.com/widdix-aws-cf-templates-releases-eu-west-1/__VERSION__/ecs/cluster.yaml&stackName=ecs-cluster&param_ParentVPCStack=vpc)
+1. [![Launch Stack](./img/launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/create/review?templateURL=https://s3-eu-west-1.amazonaws.com/widdix-aws-cf-templates-releases-eu-west-1/__VERSION__/ecs/service-dedicated-alb.yaml&stackName=ecs-service&param_ParentVPCStack=vpc&param_ParentClusterStack=ecs-cluster&param_Image=widdix/hello:v1)
 1. Click **Next** to proceed with the next step of the wizard.
 1. Specify a name and all parameters for the stack.
 1. Click **Next** to proceed with the next step of the wizard.
@@ -82,3 +85,6 @@ This template describes a fault tolerant and scalable ECS service that uses a de
 * `vpc/vpc-*azs.yaml` (**required**)
 * `ecs/cluster.yaml` (**required**)
 * `operations/alert.yaml` (recommended)
+* `security/auth-proxy-*.yaml`
+* `vpc/zone-*.yaml`
+* `state/s3.yaml*`
